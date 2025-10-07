@@ -80,71 +80,84 @@ from scipy.signal import find_peaks
 from scipy.ndimage import label
 import numpy as np
 
-def detect_jumps_with_height(time, vel_signal, acc_filt, fs, 
-                             pos_height=2, neg_height=2, distance=50, 
-                             threshold=4, min_duration=0.2, max_duration=2.0,
-                             sensor_name=""):
+def detect_jumps_by_velocity_peaks(vel_signal, time, sensor_name="", 
+                                   pos_height=2, neg_height=2, distance=50,
+                                   min_duration=0.2, max_duration=2.0, fs=52,
+                                   takeoff_offset=10):
     """
-    Detect jumps from velocity & acceleration signals.
+    Detect jumps based on velocity peaks:
+        - Takeoff: a few indices after the positive (highest) peak
+        - Landing: next negative peak (downward velocity)
     
-    1. Peak detection (takeoffs & mid-jump).
-    2. Use zero-crossing after positive peaks to refine landings.
-    3. Identify flight epochs from low-acceleration mask.
-    4. Calculate flight time & jump height.
-    
-    Returns:
-        - jumps: list of dicts with start, end, flight_time, height
-        - indices: dict with raw takeoffs, mid-jumps, landings
+    Parameters
+    ----------
+    vel_signal : array
+        Filtered velocity signal (ZUPT-corrected)
+    time : array
+        Time vector (same length as vel_signal)
+    sensor_name : str
+        For printing/debugging (e.g. 'Chest' or 'Wrist') 
+    pos_height, neg_height : float
+        Peak thresholds (in m/s)
+    distance : int
+        Minimum distance between peaks (samples)
+    min_duration, max_duration : float
+        Flight duration bounds (seconds)
+    fs : int
+        Sampling frequency
+    takeoff_offset : int
+        Number of indices to shift after the positive peak for takeoff
+
+    Returns
+    -------
+    jump_epochs : list of (takeoff_idx, landing_idx)
     """
-    # 1. Peaks: negative = takeoffs, positive = mid-air/landing candidate
+    
+    # Detect positive and negative peaks
     peaks_positive, _ = find_peaks(vel_signal, height=pos_height, distance=distance)
     peaks_negative, _ = find_peaks(-vel_signal, height=neg_height, distance=distance)
 
-    # 2. Zero-crossings after positive peaks → refine landings
-    landing_indices = []
-    for peak in peaks_positive:
-        zero_crossings = np.where(np.diff(np.sign(vel_signal[peak:]))) [0]
-        if len(zero_crossings) > 0:
-            landing_idx = peak + zero_crossings[0]
-            landing_indices.append(landing_idx)
-
     if sensor_name:
-        print(f"[{sensor_name}] Detected {len(landing_indices)} landings and {len(peaks_negative)} takeoffs.")
+        print(f"[{sensor_name}] Found {len(peaks_positive)} upward (+) peaks and {len(peaks_negative)} downward (-) peaks")
 
-    indices = {
-        "takeoffs": peaks_negative,
-        "mid-jump": peaks_positive,
-        "landings": landing_indices,
-    }
 
-    # 3. Flight mask based on acceleration threshold
-    min_samples = int(min_duration * fs)
-    max_samples = int(max_duration * fs)
-    flight_mask = np.abs(acc_filt) < threshold
-    labels, num = label(flight_mask)
+    jump_epochs = []
 
-    jumps = []
-    for i in range(1, num+1):
-        idx = np.where(labels == i)[0]
-        if min_samples <= len(idx) <= max_samples:
-            start_idx = idx[0]
-            # use first landing after start
-            landing_after_start = [li for li in landing_indices if li > start_idx]
-            if landing_after_start:
-                end_idx = landing_after_start[0]
-                flight_time = time[end_idx] - time[start_idx]
-                height = (9.81 * flight_time**2) / 8
-                jumps.append({
-                    "start": start_idx,
-                    "end": end_idx,
-                    "flight_time": flight_time,
-                    "height": height,
-                })
+    # For each positive peak, shift by takeoff_offset then find landing
+    for pos_peak in peaks_positive:
+        takeoff_idx = pos_peak + takeoff_offset  # shift a few indices after the positive peak
+        # Find the first landing index after the (shifted) takeoff
+        landings_after = [p for p in peaks_negative if p > takeoff_idx]
+        if len(landings_after) == 0:
+            continue
+        landing_idx = landings_after[0]
 
-    return jumps, indices
+        # Compute flight time using the original 
+        flight_time = time[landing_idx] - time[takeoff_idx]
+        if min_duration <= flight_time <= max_duration:
+            jump_epochs.append((takeoff_idx, landing_idx))
+
+    print(f"[{sensor_name}] Detected {len(jump_epochs)} valid jumps.") 
+
+    # Compute jump height from flight time
+    jump_data = []
+
+    for start, end in jump_epochs:
+        flight_time = time[end] - time[start]
+        height = 0.5 * 9.81 * (flight_time / 2) ** 2  # h = 0.5 * g * (t/2)^2
+        jump_data.append({
+            "takeoff_time": time[start],
+            "landing_time": time[end],
+            "flight_time": flight_time,
+            "height": height
+        })
+    
+    if sensor_name:
+        print(f"[{sensor_name}] Computed heights for {len(jump_data)} jumps.")
+    return jump_epochs, peaks_negative, peaks_positive, jump_data
 
 # Full Pipeline 
-def process_sensor_data(df, fs=50):
+def process_sensor_data(df, fs=50, sensor_name=""):
     """
     df must have:
     ['time','AccX','AccY','AccZ','GyroX','GyroY','GyroZ','MagX','MagY','MagZ']
@@ -172,11 +185,16 @@ def process_sensor_data(df, fs=50):
     # ZUPT
     vel_corrected, stance = apply_zupt(acc_mag, vel, df["time"].to_numpy())
 
-    # Jump detection
-    jumps, indices  = detect_jumps_with_height(df["time"].to_numpy(), 
-                                               vel_corrected, 
-                                               acc_filt, 
-                                               fs=fs, 
-                                               sensor_name="Chest")
+    # Jump detection and height estimation
+    jump_data, pos_peaks, neg_peaks = detect_jumps_by_velocity_peaks(
+    vel_corrected, df["time"].to_numpy(), sensor_name=sensor_name, fs=fs
+)
 
-    return acc_filt, vel_corrected, stance, jumps, indices
+    return {
+        "acc_filt": acc_filt,
+        "vel_corrected": vel_corrected,
+        "stance": stance,
+        "jumps": jump_data,
+        "pos_peaks": pos_peaks,
+        "neg_peaks": neg_peaks
+    }
