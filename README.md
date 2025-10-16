@@ -28,14 +28,13 @@ ProJump leverages lightweight, wearable IMUs to enable **low-cost, portable, and
    - Gravity subtraction and noise filtering.  
    - Detection of flight phase using a **0.5 g threshold** and velocity signatures.
 
-3. **Jump Height Estimation:**  
+3. **Jump Height Calculation:**  
    Flight time is determined from take-off to landing events and used to calculate height as:  
 
-   \[
-   h = \frac{1}{8} g t^2
-   \]
+$$
+h = \frac{1}{8} \cdot gt^2  \qquad g = 9.81~\mathrm{m/s^2}
+$$
 
-   where \( g = 9.81~\mathrm{m/s^2} \).
 
 4. **Validation:**  
    Algorithm design inspired by recent studies demonstrating high reliability of IMU-based jump height estimation methods. Future validation tests to be performed in-field and against ground truth in force plates. 
