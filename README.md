@@ -1,7 +1,7 @@
 # 🏐 ProJump: Real-Time Jump Detection and Height Estimation Using IMU Data
 
 ## Overview
-**ProJump** is a Python-based system for detecting and measuring vertical jumps using data from an **inertial measurement unit (IMU)**.  
+**ProJump** is currently a Python-based system for detecting and measuring vertical jumps using data from an **inertial measurement unit (IMU)**.  
 Originally designed for **beach volleyball performance analysis**, this project demonstrates a reliable, field-ready alternative to laboratory tools like force plates or motion capture systems.
 
 ## Motivation
